@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "TechDoc Reader - 영어 기술 문서 리딩 도우미",
+  "version": "0.2.0",
+  "minimum_chrome_version": "102",
+  "description": "영어 기술 문서에서 문장을 드래그하면 번역하고, 문맥에 맞게 설명하고, 단어장에 저장합니다.",
+  "permissions": ["storage", "activeTab", "scripting"],
+  "host_permissions": [
+    "https://api.openai.com/*",
+    "https://api.anthropic.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_page": "options.html",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

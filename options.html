@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>TechDoc Reader 설정</title>
+  <style>
+    body { max-width: 520px; margin: 40px auto; padding: 0 20px; font-family: -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", "Segoe UI", sans-serif; color: #111827; font-size: 14px; }
+    h1 { font-size: 20px; }
+    label { display: block; font-weight: 600; margin: 18px 0 6px; }
+    select, input { width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; box-sizing: border-box; }
+    input[type="checkbox"] { width: auto; margin-right: 8px; }
+    .hint { color: #6b7280; font-size: 12px; margin-top: 4px; }
+    button { margin-top: 22px; background: #2563eb; color: #fff; border: none; border-radius: 6px; padding: 8px 18px; font-size: 14px; cursor: pointer; }
+    #status { margin-left: 10px; color: #059669; }
+    .box { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; margin-top: 24px; font-size: 13px; color: #374151; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <h1>TechDoc Reader 설정</h1>
+
+  <label for="provider">AI 제공자</label>
+  <select id="provider">
+    <option value="openai">OpenAI</option>
+    <option value="anthropic">Anthropic (Claude)</option>
+  </select>
+
+  <label for="apiKey">API 키</label>
+  <input id="apiKey" type="password" placeholder="sk-..." autocomplete="off" maxlength="512" />
+  <div class="hint">기본적으로 키는 브라우저 세션 동안만 유지됩니다. 브라우저 재시작·확장 다시 로드 시 다시 입력하세요.</div>
+  <label><input id="rememberKey" type="checkbox" />API 키를 이 브라우저에 계속 저장</label>
+  <div class="hint">선택하면 키가 로컬에 저장됩니다. 브라우저 프로필에 접근 가능한 사람으로부터 키를 보호하는 암호화 저장소는 아닙니다. 키를 비우고 저장하면 삭제됩니다.</div>
+
+  <label for="model">모델 (선택)</label>
+  <input id="model" type="text" placeholder="비워두면 기본 모델 사용" maxlength="120" />
+  <div class="hint" id="modelHint"></div>
+
+  <label><input id="allowCloudTranslation" type="checkbox" />내장 번역 실패 시 외부 AI 번역 허용</label>
+  <div class="hint">번역 버튼을 누른 선택 텍스트(최대 1,000자)가 위 AI 제공자에게 전송되며 비용이 발생할 수 있습니다.</div>
+  <label><input id="allowCloudExplanation" type="checkbox" />외부 AI 설명 허용</label>
+  <div class="hint">AI 설명 버튼을 누르면 선택 텍스트와 주변 문맥(최대 600자)이 위 AI 제공자에게 전송됩니다. 민감한 문서에서는 허용을 해제하세요.</div>
+
+  <button id="save" disabled>저장</button><span id="status" role="status" aria-live="polite"></span>
+
+  <div class="box">
+    <strong>동작 방식</strong><br />
+    • 확장 팝업의 '이 페이지에서 사용'을 누른 페이지에서만 실행합니다.<br />
+    • 번역: Chrome 내장 번역 API를 먼저 사용합니다. 외부 번역은 위에서 허용한 경우에만 대체합니다.<br />
+    • AI 설명: 위에서 외부 전송을 허용한 경우 API 키를 사용합니다.
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>
