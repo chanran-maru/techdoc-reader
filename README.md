@@ -1,95 +1,118 @@
 # TechDoc Reader 📖
 
-> 영어 기술 문서를 읽다가 막히는 문장을 **드래그 한 번으로 번역하고, 문맥에 맞게 설명받고, 단어장에 쌓는** 크롬 확장 프로그램
+A Chrome extension that helps you read English technical documentation more easily.
 
-<!-- TODO: 데모 GIF 추가 (드래그 → 번역 → AI 설명 → 저장 흐름, 10초 이내) -->
-<!-- ![demo](docs/demo.gif) -->
+Select any English text on a webpage to translate it instantly, get an AI-powered explanation based on its context, and save useful expressions for later review.
 
-## 왜 만들었나
+## Why I Built This
 
-공식 문서(React, PyTorch, MDN 등)를 읽을 때 일반 번역기는 기술 용어까지 어색하게 번역해버리고,
-"reconcile", "idempotent"처럼 **이 문맥에서 정확히 무슨 뜻인지**는 알려주지 않습니다.
-읽으면서 모르는 표현을 바로 이해하고, 나중에 다시 복습할 수 있는 도구가 필요했습니다.
+While studying programming, I often read English documentation such as React, PyTorch, and MDN.
 
-## 주요 기능
+Sometimes, regular translators don't handle technical terms very well. Even when a sentence is translated correctly, it can still be difficult to understand what certain words or expressions mean in a technical context.
 
-| 기능 | 설명 |
-|---|---|
-| 드래그 번역 | 텍스트를 선택하면 나타나는 `번역` 버튼으로 바로 번역 |
-| AI 문맥 설명 | 선택한 표현이 **주변 문단 맥락에서** 무슨 뜻인지, 기술적 배경까지 설명 |
-| 단어장 | 원문·번역·설명·출처 링크를 함께 저장하고, 검색·삭제·CSV 내보내기 |
-| 하이브리드 엔진 | 번역은 Chrome 내장 AI(무료·온디바이스), 설명은 사용자 API 키(OpenAI / Claude) |
+I wanted a simple tool that would let me translate and understand unfamiliar expressions without constantly switching between documentation, translators, and AI chatbots.
 
-## 아키텍처
+That's why I built TechDoc Reader.
 
-```
-┌────────────── 웹 페이지 ──────────────┐
-│  content.js (Shadow DOM UI)           │
-│   ├─ 선택 감지 + 주변 문맥 추출        │
-│   ├─ Translator API (온디바이스 번역) ─┼──▶ 실패/미지원 + 전송 허용 시 ▼
-│   └─ 신뢰된 사용자 이벤트만 처리      │
-└──────────────┬────────────────────────┘
-               │ chrome.runtime.sendMessage
-┌──────────────▼────────────────────────┐
-│  background.js (Service Worker)       │
-│   ├─ 검증·동의 확인·호출 제한          │
-│   ├─ 키 관리·단어장 저장               │
-│   └─ OpenAI / Anthropic API 호출       │──▶ LLM API
-└───────────────────────────────────────┘
-popup.html  : 단어장 조회/검색/CSV 내보내기
-options.html: AI 제공자·API 키·모델 설정
-```
+## Features
 
-### 설계에서 고민한 점
+- **Instant Translation** — Select English text and click the translation button to see the result.
+- **AI Explanations** — Get explanations of technical terms and expressions based on the surrounding context.
+- **Vocabulary Collection** — Save original text, translations, explanations, and source links for later review.
+- **Search & Export** — Search or delete saved entries and export them as a CSV file.
+- **Hybrid Translation** — Use Chrome's built-in Translator API for on-device translation, with optional OpenAI or Claude support.
 
-- **내장 번역 우선**: 자주 쓰는 번역은 Chrome 내장 Translator API로 처리합니다. 내장 번역 실패 시 외부 AI로 대체하는 기능과 AI 설명은 각각 설정에서 외부 전송을 허용해야 사용할 수 있으며 비용이 발생할 수 있습니다.
-- **API 키 격리**: API 호출과 키 관리는 Service Worker에서 처리합니다. 로컬·세션 저장소는 `TRUSTED_CONTEXTS`로 제한하고 content script에는 키를 전달하지 않습니다. 키는 기본적으로 세션에만 유지하며 영구 저장은 선택 사항입니다.
-- **Shadow DOM UI**: CSS 충돌을 줄이기 위해 closed Shadow DOM을 사용합니다. Shadow DOM 자체를 보안 경계로 간주하지 않고, 번역·설명·저장을 시작하는 이벤트의 `isTrusted`도 검사합니다.
-- **페이지 접근 최소화**: 모든 웹사이트에 자동 주입하지 않고 팝업에서 `이 페이지에서 사용`을 누른 페이지의 최상위 프레임에만 주입합니다.
-- **XSS 방지**: LLM 응답과 페이지 텍스트는 모두 `textContent`로만 렌더링하고 `innerHTML`은 쓰지 않습니다.
-- **문맥 추출**: 선택 영역이 속한 문단(`p`, `li`, `td` 등)에서 최대 600자를 잘라 설명 프롬프트에 함께 넣습니다.
+## How It Works
 
-## 설치 (개발 모드)
+1. Open a webpage containing English technical documentation.
+2. Click the extension icon and select **Enable on this page**.
+3. Highlight the text you want to translate.
+4. Click the translation button that appears.
+5. View the translation, request an AI explanation, or save the expression to your vocabulary collection.
 
-1. 이 레포를 클론합니다.
-2. Chrome에서 `chrome://extensions`를 열고 우측 상단 **개발자 모드**를 켭니다.
-3. **압축해제된 확장 프로그램을 로드합니다** → 이 폴더를 선택합니다.
-4. 문서를 연 뒤 확장 아이콘 → **이 페이지에서 사용**을 누르고 영어 텍스트를 선택합니다. 새로고침하거나 새 문서를 열면 다시 활성화하세요. `chrome://`나 Chrome 웹 스토어 등 확장 주입이 금지된 페이지에서는 사용할 수 없습니다.
-5. 외부 AI가 필요하면 **설정**에서 제공자와 API 키를 입력하고, 외부 AI 번역/설명 전송을 각각 허용한 뒤 저장합니다. 내장 번역만 사용하면 키와 외부 전송 허용이 필요 없습니다.
+## Installation
 
-> Chrome 내장 번역은 Chrome 138 이상 데스크톱에서 동작하며, 처음 쓸 때 번역 모델을 한 번 다운로드합니다.
+1. Clone this repository.
 
-## 개인정보
+   ```bash
+   git clone https://github.com/chanran-maru/techdoc-reader.git
+   ```
 
-- 단어장은 이 브라우저의 `chrome.storage.local`에 저장됩니다. 팝업에서 개별 삭제 또는 전체 삭제할 수 있습니다. 자동 만료는 없습니다.
-- API 키는 기본적으로 `chrome.storage.session`에 유지됩니다. 브라우저 재시작·확장 비활성화·다시 로드 시 사라집니다. `API 키를 이 브라우저에 계속 저장`을 선택하면 로컬 저장소에 저장하며, 이는 OS 비밀 저장소를 이용한 암호화 보관이 아닙니다. 키를 비우고 저장하면 삭제됩니다.
-- 내장 번역은 기기 안에서 처리됩니다. 외부 전송은 기본적으로 꺼져 있습니다. 외부 AI 번역을 허용한 상태에서는 내장 번역 실패/30초 초과 시 선택한 텍스트를 전송합니다. AI 설명은 별도로 허용한 상태에서 설명 버튼을 누르면 선택한 텍스트와 주변 문맥을 전송합니다. 수신자는 설정한 OpenAI 또는 Anthropic이며 별도의 중계 서버는 없습니다.
-- 출처 URL의 사용자 정보·쿼리·해시는 저장/내보내기에서 제거합니다. URL 경로와 문맥·제목 자체에 민감정보가 포함될 수 있으므로 저장과 CSV 공유 전에 확인하세요.
-- 0.2.0 최초 실행 시 기존 키를 세션 저장으로 옮기고 영구 저장 및 외부 전송 허용을 해제합니다. 기존 단어장의 출처 URL에서도 사용자 정보·쿼리·해시를 제거합니다.
+2. Open `chrome://extensions` in Chrome.
+3. Enable **Developer mode** in the top-right corner.
+4. Click **Load unpacked** and select the project folder.
+5. Open a webpage and enable the extension to start using it.
 
-## 보안 검증
+**Notes:**
+- Chrome's built-in Translator API requires Chrome 138 or later on desktop. The translation model may need to be downloaded on first use.
+- AI explanations require an OpenAI or Anthropic API key and permission to send text to the selected provider.
+- Basic on-device translation works without an API key.
+- The extension must be enabled again after refreshing the page or opening a new document.
 
-Node.js 18 이상에서 외부 패키지나 실제 API 키 없이 실행합니다.
+## Tech Stack
 
-```sh
+- JavaScript (Vanilla JS)
+- Chrome Extension Manifest V3
+- Chrome Built-in AI (Translator API)
+- OpenAI API / Anthropic API
+- Chrome Storage API
+- Shadow DOM
+
+## Implementation Notes
+
+### On-Device Translation
+
+I used Chrome's built-in Translator API as the primary translation method to reduce unnecessary API calls and costs.
+
+If the built-in translation is unavailable or fails, users can choose to use an external AI provider instead.
+
+### API Key Management
+
+API requests are handled through the extension's background Service Worker rather than the webpage.
+
+API keys are stored in session storage by default, with an option to keep them in local storage. Keys are never passed to the content script.
+
+### UI Isolation
+
+I used Shadow DOM to prevent the extension's styles from interfering with the existing webpage.
+
+The extension also runs only on pages where the user explicitly enables it.
+
+### Context-Aware Explanations
+
+When requesting an AI explanation, the extension extracts nearby text from the same paragraph or element.
+
+This gives the AI additional context, making it easier to explain technical expressions accurately.
+
+### Security and Privacy
+
+- External AI requests require user permission.
+- On-device translations are processed locally.
+- Text and AI responses are rendered using `textContent` instead of `innerHTML`.
+- Vocabulary entries are stored locally using `chrome.storage.local`.
+- API keys are kept in session storage by default.
+
+For more details about security decisions and testing, see [SECURITY.md](SECURITY.md).
+
+## Testing
+
+Security-related tests can be run with Node.js 18 or later.
+
+```bash
 node --test tests/security.test.cjs
 ```
 
-요청 검증, 합성 이벤트 차단, 키 접근/저장 정책, 전송 동의, 호출 제한, 타임아웃, 단어장 저장, CSV 수식 방어를 모의 Chrome API/DOM으로 검증합니다. 실제 Chrome과 스프레드시트에서의 수동 확인 방법 및 제한은 [SECURITY.md](SECURITY.md)를 참고하세요.
+The tests cover message validation, API key handling, user permissions, request limits, and vocabulary storage.
 
-## 기술 스택
+## Future Improvements
 
-Chrome Extension Manifest V3 · Vanilla JS · Chrome Built-in AI (Translator API) · OpenAI / Anthropic Messages API
+- [ ] Add a demo GIF and publish to the Chrome Web Store
+- [ ] Add keyboard shortcuts for translation
+- [ ] Build a vocabulary review mode with flashcards
+- [ ] Support custom glossaries for technical terms
+- [ ] Add Anki export
+- [ ] Set up GitHub Actions for automated testing
 
-## 로드맵
+## License
 
-- [ ] 데모 GIF와 스토어 등록
-- [ ] 단축키로 번역 (`chrome.commands`)
-- [ ] 단어장 복습 모드 (플래시카드, 간격 반복)
-- [ ] 도메인별 용어집: 자주 저장한 용어는 번역할 때 일관되게 유지
-- [ ] Anki용 내보내기
-- [ ] ESLint + Playwright E2E 테스트 + GitHub Actions CI
-
-## 라이선스
-
-MIT
+This project is licensed under the MIT License.
