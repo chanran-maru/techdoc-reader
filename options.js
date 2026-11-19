@@ -20,7 +20,11 @@ request({ type: "getSettings" }).then(({ settings }) => {
   $("save").disabled = false;
 }).catch(() => { $("status").textContent = "설정을 불러오지 못했습니다. 이 페이지를 다시 열어 주세요."; });
 
-$("provider").addEventListener("change", updateHint);
+$("provider").addEventListener("change", () => {
+  $("apiKey").value = "";
+  $("status").textContent = "외부 AI를 사용하려면 선택한 제공자의 API 키를 입력하고 저장하세요.";
+  updateHint();
+});
 
 $("save").onclick = async () => {
   $("save").disabled = true;

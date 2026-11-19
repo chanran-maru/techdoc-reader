@@ -13,7 +13,7 @@ const llm = { type: "llm", mode: "explain", text: "example", context: "some cont
 const settings = { provider: "openai", apiKey: "test-only-key", model: "", rememberKey: false, allowCloudTranslation: true, allowCloudExplanation: true };
 const entry = { text: "example", context: "context", title: "Document", translation: "번역", explanation: "설명" };
 
-function worker(initial = {}, fetchImpl, sessionInitial = {}) {
+function worker(initial = {}, fetchImpl, sessionInitial = {}, beforeSet) {
   let listener;
   let now = 100000;
   const timers = new Map();
@@ -29,7 +29,13 @@ function worker(initial = {}, fetchImpl, sessionInitial = {}) {
         const names = typeof keys === "string" ? [keys] : keys;
         return Object.fromEntries(names.filter((key) => key in data).map((key) => [key, structuredClone(data[key])]));
       },
-      async set(values) { Object.assign(data, structuredClone(values)); },
+      async set(values) {
+        if (beforeSet) await beforeSet(name, values);
+        Object.assign(data, structuredClone(values));
+      },
+      async remove(keys) {
+        for (const key of [].concat(keys)) delete data[key];
+      },
     };
   }
   const local = area(initial, "local"), session = area(sessionInitial, "session");
@@ -70,12 +76,12 @@ test("manifest grants page access only through activeTab", () => {
   assert.deepEqual(manifest.host_permissions, ["https://api.openai.com/*", "https://api.anthropic.com/*"]);
 });
 
-test("migration restricts storage, moves legacy key to session, disables cloud, sanitizes old URLs", async () => {
+test("migration restricts storage, discards legacy key, disables cloud, sanitizes old URLs", async () => {
   const w = worker({ settings: { apiKey: "legacy-key", provider: "openai" }, vocab: [{ ...entry, url: pageSender.url }] });
   const result = await w.send({ type: "getSettings" }, optionsSender);
-  assert.equal(result.settings.apiKey, "legacy-key");
+  assert.equal(result.settings.apiKey, "");
   assert.equal(w.local.settings.apiKey, undefined);
-  assert.equal(w.session.apiKey, "legacy-key");
+  assert.equal(w.session.apiKey, undefined);
   assert.equal(w.local.settings.allowCloudTranslation, false);
   assert.equal(w.local.settings.allowCloudExplanation, false);
   assert.equal(w.local.vocab[0].url, "https://docs.test/guide");
@@ -97,14 +103,88 @@ test("key is never returned to page scripts; privileged operations reject page s
 test("API key persistence is opt-in, reversible, and empty save removes key", async () => {
   const w = await configured();
   assert.equal(w.local.settings.apiKey, undefined);
-  assert.equal(w.session.apiKey, settings.apiKey);
+  assert.equal(w.session[w.local.settings.sessionKeySlot].apiKey, settings.apiKey);
   await w.send({ type: "saveSettings", settings: { ...settings, rememberKey: true } }, optionsSender);
   assert.equal(w.local.settings.apiKey, settings.apiKey);
   await w.send({ type: "saveSettings", settings }, optionsSender);
   assert.equal(w.local.settings.apiKey, undefined);
   await w.send({ type: "saveSettings", settings: { ...settings, apiKey: "" } }, optionsSender);
-  assert.equal(w.session.apiKey, "");
+  assert.deepEqual(w.session, {});
   assert.equal((await w.send(llm)).error, "NO_KEY");
+});
+
+test("switching providers clears the options key and saving blocks cloud requests", async () => {
+  const w = await configured();
+  const fields = new Map();
+  function getElementById(id) {
+    if (!fields.has(id)) fields.set(id, { addEventListener(event, fn) { this[event] = fn; } });
+    return fields.get(id);
+  }
+  vm.runInNewContext(source("options.js"), {
+    document: { getElementById },
+    chrome: { runtime: { sendMessage: (message) => w.send(message, optionsSender) } },
+  });
+  await new Promise(setImmediate);
+  assert.equal(getElementById("apiKey").value, settings.apiKey);
+  getElementById("provider").value = "anthropic";
+  getElementById("provider").change();
+  assert.equal(getElementById("apiKey").value, "");
+  await getElementById("save").onclick();
+  assert.equal(w.local.settings.provider, "anthropic");
+  assert.equal((await w.send(llm)).error, "NO_KEY");
+  assert.equal(w.requests.length, 0);
+});
+
+test("a session key for a different provider cannot be sent during a settings update", async () => {
+  const w = worker({ securityVersion: 2, settings: { ...settings, sessionKeySlot: "sessionKeyA" } }, undefined,
+    { sessionKeyA: { apiKey: "new-test-key", provider: "anthropic" } });
+  assert.equal((await w.send(llm)).error, "NO_KEY");
+  assert.equal(w.requests.length, 0);
+});
+
+test("failed version 1 migration blocks requests and retries without restoring old credentials", async () => {
+  const oldSettings = { ...settings, provider: "anthropic", rememberKey: true, model: "custom" };
+  const w = worker({ securityVersion: 1, settings: oldSettings, vocab: [entry] }, undefined,
+    { apiKey: "legacy-session", keyProvider: "openai" }, (area) => {
+      if (area === "local") throw new Error("migration interrupted");
+    });
+  assert.equal((await w.send(llm)).ok, false);
+  assert.equal(w.requests.length, 0);
+  assert.equal(w.local.securityVersion, 1);
+  const retry = worker(w.local, undefined, w.session);
+  assert.equal((await retry.send(llm)).error, "NO_KEY");
+  assert.equal(retry.requests.length, 0);
+  assert.equal(retry.local.securityVersion, 2);
+  assert.equal(retry.local.settings.apiKey, undefined);
+  assert.deepEqual(retry.session, {});
+  assert.deepEqual(retry.local.vocab, [entry]);
+  const loaded = await retry.send({ type: "getSettings" }, optionsSender);
+  assert.deepEqual({ ...loaded.settings }, { ...oldSettings, apiKey: "" });
+});
+
+test("a request overlapping a failed save uses the previous key and consent", async () => {
+  let notifyStaged, releaseWrite;
+  const staged = new Promise(resolve => { notifyStaged = resolve; });
+  const paused = new Promise(resolve => { releaseWrite = resolve; });
+  const w = worker({ securityVersion: 2 }, undefined, {}, async (area, values) => {
+    if (area === "local" && values.settings?.allowCloudExplanation === false) {
+      notifyStaged();
+      await paused;
+      throw new Error("local write failed");
+    }
+  });
+  assert.equal((await w.send({ type: "saveSettings", settings }, optionsSender)).ok, true);
+  const saving = w.send({ type: "saveSettings", settings: {
+    ...settings, apiKey: "replacement-key", allowCloudExplanation: false,
+  } }, optionsSender);
+  await staged;
+  const request = w.send(llm);
+  releaseWrite();
+  assert.equal((await saving).ok, false);
+  assert.equal((await request).ok, true);
+  assert.equal(w.requests.length, 1);
+  assert.equal(w.requests[0].options.headers.Authorization, "Bearer test-only-key");
+  assert.ok(!JSON.stringify(w.session).includes("replacement-key"));
 });
 
 test("invalid senders and non-page contexts cannot invoke the API", async () => {
@@ -147,10 +227,11 @@ test("both providers accept valid requests; translation excludes surrounding con
   const w = await configured();
   assert.equal((await w.send({ ...llm, mode: "translate" })).ok, true);
   assert.equal(JSON.parse(w.requests[0].options.body).messages[1].content, llm.text);
-  await w.send({ type: "saveSettings", settings: { ...settings, provider: "anthropic" } }, optionsSender);
+  await w.send({ type: "saveSettings", settings: { ...settings, provider: "anthropic", apiKey: "second-test-key" } }, optionsSender);
   w.advance(2100);
   assert.equal((await w.send(llm)).ok, true);
   assert.equal(w.requests[1].url, "https://api.anthropic.com/v1/messages");
+  assert.equal(w.requests[1].options.headers["x-api-key"], "second-test-key");
 });
 
 test("per-tab throttling persists across worker restart and expires", async () => {
@@ -340,7 +421,7 @@ test("settings page loads and saves via Worker with explicit consent and session
   elements.apiKey.value = "  test-key  ";
   elements.allowCloudExplanation.checked = true;
   await elements.save.onclick();
-  assert.equal(w.session.apiKey, "test-key");
+  assert.equal(w.session[w.local.settings.sessionKeySlot].apiKey, "test-key");
   assert.equal(w.local.settings.apiKey, undefined);
   assert.equal(w.local.settings.allowCloudExplanation, true);
   assert.equal(w.local.settings.allowCloudTranslation, false);

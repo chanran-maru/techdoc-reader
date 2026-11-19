@@ -31,15 +31,15 @@ const ready = (async () => {
     chrome.storage.session.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" }),
   ]);
   const { settings = {}, vocab = [], securityVersion } = await chrome.storage.local.get(["settings", "vocab", "securityVersion"]);
-  if (securityVersion !== 1) {
-    const { apiKey, ...preferences } = settings;
-    // Existing installations must opt in again before persisting a key or sending text.
-    if (apiKey) await chrome.storage.session.set({ apiKey });
-    await chrome.storage.local.set({
-      settings: { ...preferences, rememberKey: false, allowCloudTranslation: false, allowCloudExplanation: false },
-      vocab: vocab.map((entry) => ({ ...entry, url: TechDocSecurity.sourceURL(entry.url) })),
-      securityVersion: 1,
-    });
+  if (securityVersion !== 2) {
+    const { apiKey, sessionKeySlot, ...preferences } = settings;
+    const update = { settings: preferences, securityVersion: 2 };
+    if (securityVersion !== 1) {
+      Object.assign(preferences, { rememberKey: false, allowCloudTranslation: false, allowCloudExplanation: false });
+      update.vocab = vocab.map((entry) => ({ ...entry, url: TechDocSecurity.sourceURL(entry.url) }));
+    }
+    await chrome.storage.session.remove(["apiKey", "keyProvider"]);
+    await chrome.storage.local.set(update);
   }
 })();
 // Keep initialization failures handled even before a message arrives; requests fail closed.
@@ -63,10 +63,39 @@ const PROMPTS = {
     "전체 6줄 이내로 간결하게.",
 };
 
-async function getSettings() {
+const SESSION_KEY_SLOTS = ["sessionKeyA", "sessionKeyB"];
+
+async function readSettings() {
   const { settings = {} } = await chrome.storage.local.get("settings");
-  const { apiKey = "" } = await chrome.storage.session.get("apiKey");
-  return { provider: "openai", model: "", ...settings, apiKey: settings.rememberKey === true ? (settings.apiKey || "") : apiKey };
+  const { sessionKeySlot, apiKey = "", ...preferences } = settings;
+  let activeKey = "";
+  if (preferences.rememberKey === true) {
+    activeKey = apiKey;
+  } else if (SESSION_KEY_SLOTS.includes(sessionKeySlot)) {
+    const record = (await chrome.storage.session.get(sessionKeySlot))[sessionKeySlot];
+    if (record && record.provider === preferences.provider) activeKey = record.apiKey;
+  }
+  return { provider: "openai", model: "", ...preferences, apiKey: activeKey };
+}
+
+async function saveSettings({ provider, model, rememberKey, allowCloudTranslation, allowCloudExplanation, apiKey }) {
+  const settings = { provider, model, rememberKey, allowCloudTranslation, allowCloudExplanation };
+  if (rememberKey) {
+    settings.apiKey = apiKey;
+  } else if (apiKey) {
+    const { settings: previous } = await chrome.storage.local.get("settings");
+    settings.sessionKeySlot = SESSION_KEY_SLOTS.find(slot => slot !== previous?.sessionKeySlot);
+    await chrome.storage.session.set({ [settings.sessionKeySlot]: { provider, apiKey } });
+  }
+  // Only this write activates the new credential and permissions.
+  try {
+    await chrome.storage.local.set({ settings });
+  } catch (error) {
+    if (settings.sessionKeySlot) await chrome.storage.session.remove(settings.sessionKeySlot);
+    throw error;
+  }
+  // Cleanup cannot undo a committed save. Unreferenced slots expire with the session.
+  await chrome.storage.session.remove(SESSION_KEY_SLOTS.filter(slot => slot !== settings.sessionKeySlot)).catch(() => {});
 }
 
 async function fetchJSON(url, options) {
@@ -128,7 +157,7 @@ async function callAnthropic({ apiKey, model }, system, user) {
 
 async function callLLM({ mode, text, context }, sender) {
   if (!["translate", "explain"].includes(mode) || !bounded(text, 1000, true) || !bounded(context, 600)) fail("INVALID_REQUEST");
-  const settings = await getSettings();
+  const settings = await serializeStorage(readSettings);
   const consent = mode === "translate" ? settings.allowCloudTranslation : settings.allowCloudExplanation;
   if (consent !== true) fail("CLOUD_DISABLED");
   if (!["openai", "anthropic"].includes(settings.provider)) fail("INVALID_REQUEST");
@@ -178,19 +207,13 @@ async function handleMessage(msg, sender) {
   try { await ready; } catch { fail("STORAGE_ERROR"); }
 
   if (msg.type === "llm" && page) return { text: await callLLM(msg, sender) };
-  if (msg.type === "getSettings" && settingsPage) return { settings: await getSettings() };
+  if (msg.type === "getSettings" && settingsPage) return { settings: await serializeStorage(readSettings) };
   if (msg.type === "saveSettings" && settingsPage) {
     const s = msg.settings;
     if (!s || !["openai", "anthropic"].includes(s.provider) || !bounded(s.apiKey, 512) || /\s/.test(s.apiKey) ||
         !bounded(s.model, 120) || (s.model && !/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/.test(s.model)) ||
         ![s.rememberKey, s.allowCloudTranslation, s.allowCloudExplanation].every((v) => typeof v === "boolean")) fail("INVALID_REQUEST");
-    await serializeStorage(async () => {
-      await chrome.storage.session.set({ apiKey: s.apiKey });
-      const settings = { provider: s.provider, model: s.model, rememberKey: s.rememberKey,
-        allowCloudTranslation: s.allowCloudTranslation, allowCloudExplanation: s.allowCloudExplanation };
-      if (s.rememberKey) settings.apiKey = s.apiKey;
-      await chrome.storage.local.set({ settings });
-    });
+    await serializeStorage(() => saveSettings(s));
     return {};
   }
   if (msg.type === "saveWord" && page) {
